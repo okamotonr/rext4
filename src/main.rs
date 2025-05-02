@@ -1,4 +1,4 @@
-use rext4::{defs::BlockContents, group::Ext4Fs};
+use rext4::{defs::BlockContents, fs_parser::Ext4Fs};
 use std::collections::VecDeque;
 use std::env;
 use std::fs::File;
@@ -27,10 +27,8 @@ fn traverse_file(ext4_fs: &Ext4Fs) {
                 match i_block_contents {
                     BlockContents::Data(chain) => {},
                     BlockContents::Dentries(entries) => {
-                        let mut num = 0;
                         for d_entry in entries {
                             println!("    d_entry num {}", d_entry.inode);
-                            num += 1;
                             if d_entry.inode < 2 {
                                 println!("    parent inode is {current_inode_num} {:?}", inode);
                                 println!("    ignore this {:?}", d_entry);
@@ -47,11 +45,8 @@ fn traverse_file(ext4_fs: &Ext4Fs) {
                                 queue.push_back((
                                         current_inode_num, d_entry.inode as u64, file_path
                                         ))
-                            } else {
-                                println!("    not ignore d_entry {:?}", d_entry)
                             }
                         }
-                        println!("    entry num is {} {}", num, current_inode_num)
                     },
                     BlockContents::InliedData(data) => {
                         if inode.i_mode.ty.is_symlink() {
