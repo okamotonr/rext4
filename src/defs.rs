@@ -1,10 +1,11 @@
 use bitflags::bitflags;
 use nom::combinator::map;
 use nom::number::complete::{le_u8, le_u16, le_u32};
-use nom_derive::{Nom, nom};
+use nom_derive::{nom, Nom, Parse};
+use std::string::FromUtf8Error;
 use std::{mem::offset_of, ptr::slice_from_raw_parts};
 
-use crate::chain::BufferChainer;
+use crate::chain::{BufferChainer, ChainItem};
 
 pub const EXT4_LABEL_MAX: usize = 16;
 pub const EXT4_S_ERR_END: usize = offset_of!(Ext4SuperBlock, s_mount_opts);
@@ -196,7 +197,7 @@ impl Ext4Inode {
         unsafe { &*((&self.i_block as *const u32) as *const Ext4ExtentHeader) }
     }
 
-    pub fn read_block<'a, 'b, T>(&'a self, input: &'b [u8], block_size: usize, next_fn: fn(&T) -> usize) -> BufferChainer<'b, T> {
+    pub fn read_block<'a, 'b, T: ChainItem>(&'a self, input: &'b [u8], block_size: usize, ) -> BufferChainer<'b, T> {
         // TODO: use logical block index
         let header = self.get_extend_header();
         println!("heaer is {:?}", header);
@@ -211,7 +212,7 @@ impl Ext4Inode {
             };
             Self::read_e_index(input, &indices[1..(1 + header.eh_entries as usize)], block_size)
         };
-        BufferChainer::new(buffers, next_fn)
+        BufferChainer::new(buffers)
     }
 
     fn read_extent<'a, 'b>(input: &'b [u8], extents: &'a [Ext4Extent], block_size: usize) -> Vec<&'b [u8]> {
@@ -294,16 +295,22 @@ impl Ext4Inode {
             };
             Some(BlockContents::InliedData(bytes))
         } else if self.i_mode.ty.is_regular() {
-            let buffer_chainer = self.read_block(input, block_size, |&_| {1});
+            let buffer_chainer = self.read_block(input, block_size);
             Some(BlockContents::Data(buffer_chainer))
         } else if self.i_mode.ty.is_dir() {
-            let buffer_chainer = self.read_block(input, block_size, |&d_entry: &Ext4DirEntry| {
-                d_entry.rec_len as usize
-            });
+            let buffer_chainer = self.read_block(input, block_size);
             Some(BlockContents::Dentries(buffer_chainer))
         } else {
             None
         }
+    }
+}
+
+impl ChainItem for Ext4DirEntry {
+    fn from_bytes(input: &[u8]) -> (usize, Self) {
+        let (input, mut d_entry) = Ext4DirEntry::parse(input).unwrap();
+        d_entry.name.0[..d_entry.name_len as usize].copy_from_slice(&input[..d_entry.name_len as usize]);
+        (d_entry.rec_len as usize, d_entry)
     }
 }
 
@@ -482,8 +489,19 @@ pub struct Ext4GroupDesc {
 
 const EXT4_NAME_LEN: usize = 255;
 
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct Name(pub [u8; EXT4_NAME_LEN]);
+
+impl Default for Name {
+    fn default() -> Self {
+        Self([0; EXT4_NAME_LEN])
+    }
+}
+
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Nom)]
+#[nom(LittleEndian)]
 pub struct Ext4DirEntry {
     /// Inode number
     pub inode: u32,
@@ -492,16 +510,16 @@ pub struct Ext4DirEntry {
     /// Length of the name in bytes
     pub name_len: u8,
 
-    /// 
     pub file_type: u8,
     /// File name (not NUL‑terminated; valid bytes are up to `name_len`)
-    pub name: [u8; EXT4_NAME_LEN],
+    #[nom(Ignore)]
+    pub name: Name
 }
 
 impl Ext4DirEntry {
-    pub fn get_name(&self) -> Option<String> {
+    pub fn get_name(&self) -> Result<String, FromUtf8Error> {
         let name_end = self.name_len as usize;
-        Some(String::from_utf8(self.name[0..name_end].to_vec()).unwrap())
+        String::from_utf8(self.name.0[..name_end].to_vec())
     }
 }
 
