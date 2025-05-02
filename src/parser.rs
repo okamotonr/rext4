@@ -17,6 +17,7 @@ pub fn parse_block0(input: &[u8]) -> IResult<&[u8], BlockGroupWithSuperBlock> {
     let group_num = super_block.s_blocks_count_lo / super_block.s_blocks_per_group;
     let (input, group_descs) = count(Ext4GroupDesc::parse, group_num as usize).parse(input)?;
     let descs_bytes = (group_num * super_block.s_desc_size as u32) as u64;
+    println!("descs_bytes is {}", descs_bytes);
     let (input, _) = consume_block(input, super_block.s_log_block_size, descs_bytes)?;
     let (input, r_gdt_blocks) =
         take(super_block.s_log_block_size * super_block.s_reserved_gdt_blocks as u64)(input)?;
